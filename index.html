@@ -157,9 +157,7 @@
   <header>
     <div class="brand">
       <h1>FRAU<span>'s</span> PORTFOLIO</h1>
-      <p>Àngel · Live crypto holdings</p>
     </div>
-    <div class="avatar">Á</div>
   </header>
 
   <div class="total-summary">
@@ -210,7 +208,6 @@
   <div class="card">
     <div class="list-title">
       <h2>Assets</h2>
-      <span>tap name for chart · tap number to edit</span>
     </div>
 
     <div class="section-title">
@@ -542,7 +539,7 @@ function buildRow(c){
     <div class="asset-icon-wrap">${iconMarkup(c)}</div>
     <div class="asset-info">
       <div class="t">${c.ticker}</div>
-      <div class="x">${c.name} · ${c.exchange} · ${c.pct.toFixed(1)}%</div>
+      <div class="x">${c.exchange} · ${c.pct.toFixed(1)}%</div>
     </div>
     <div class="asset-right">
       <div class="v">${fmtCompact(c.value)}</div>
@@ -565,7 +562,7 @@ function buildRow(c){
     historyCache = {};
     updateTotals();
     row.querySelector('.v').textContent = fmtCompact(c.value);
-    row.querySelector('.x').textContent = `${c.name} · ${c.exchange} · ${c.pct.toFixed(1)}%`;
+    row.querySelector('.x').textContent = `${c.exchange} · ${c.pct.toFixed(1)}%`;
     if(c.ticker === activeCoin.ticker) renderActive();
   });
   return row;

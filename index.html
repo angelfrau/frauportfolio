@@ -63,7 +63,7 @@
     font-family:'Cormorant Garamond',serif; font-weight:700; font-size:9px; color:#fff;
   }
   .asset-tag span.name{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-muted); letter-spacing:.04em; }
-  .value{ font-family:'Cormorant Garamond',serif; font-size:38px; font-weight:700; letter-spacing:.01em; }
+  .value{ font-family:'Cormorant Garamond',serif; font-size:26px; font-weight:700; letter-spacing:.01em; color:var(--ink-muted); }
   .badge-row{ display:flex; align-items:center; gap:8px; margin-top:8px; }
   .badge{
     display:inline-flex; align-items:center; gap:4px;
@@ -146,7 +146,8 @@
     background:var(--card-2); border-radius:14px; padding:14px 16px; margin-bottom:16px;
   }
   .total-summary .t-label{ font-size:10.5px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.08em; font-family:'IBM Plex Mono',monospace; }
-  .total-summary .t-val{ font-family:'Cormorant Garamond',serif; font-size:24px; font-weight:700; margin-top:2px; }
+  .total-summary .t-val{ font-family:'Cormorant Garamond',serif; font-size:42px; font-weight:700; margin-top:2px; }
+  .total-summary .t-val#total-count{ font-size:28px; }
 
   footer{ text-align:center; margin-top:22px; font-size:10.5px; color:var(--ink-faint); line-height:1.6; }
 </style>
@@ -275,37 +276,17 @@ async function resolveIconTradingView(coin){
   return null;
 }
 
-async function resolveMeta(coin){
-  coin.icon = await resolveIconTradingView(coin);
-
-  // Also resolve/confirm a CoinGecko id — needed later for the price-history chart,
-  // and as a second-chance logo source if TradingView came up empty.
-  try{
-    if(coin.cgId){
-      const res = await fetch(`https://api.coingecko.com/api/v3/coins/${coin.cgId}?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false`);
-      if(!res.ok) throw new Error('bad');
-      const data = await res.json();
-      if(!coin.icon) coin.icon = data.image && (data.image.small || data.image.thumb);
-    }else{
-      const res = await fetch(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(coin.ticker)}`);
-      if(!res.ok) throw new Error('bad');
-      const data = await res.json();
-      const list = (data.coins || []);
-      const match = list.find(x => x.symbol && x.symbol.toLowerCase() === coin.ticker.toLowerCase()) || list[0];
-      if(match){
-        coin.cgId = match.id;
-        if(!coin.icon) coin.icon = match.large || match.thumb;
-      }
-    }
-  }catch(e){ /* CoinGecko unavailable/rate-limited — TradingView logo (if any) still stands */ }
-}
-
 function iconMarkup(coin){
   if(coin.icon){
     return `<img src="${coin.icon}" alt="${coin.ticker}"
       onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'mono',style:'background:${coin.color}',textContent:'${coin.ticker.slice(0,2)}'}))">`;
   }
   return `<span class="mono" style="background:${coin.color}">${coin.ticker.slice(0,2)}</span>`;
+}
+
+async function resolveIcons(){
+  // TradingView logos, one request per coin — different host, doesn't touch CoinGecko's budget.
+  await Promise.all(coins.map(async c => { c.icon = await resolveIconTradingView(c); }));
 }
 
 /* ============ SEEDED FALLBACK GENERATOR ============ */
@@ -339,40 +320,50 @@ function generateFallback(coin, days){
   }));
 }
 
-/* ============ FETCH LIVE HISTORY ============ */
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+/* ============ FETCH LIVE HISTORY ============
+   The chart is the one thing that has to be right, so this gets one retry
+   (CoinGecko's public tier rate-limits in short bursts — a single retry after
+   a short pause clears most of those) before ever falling back to the
+   synthetic placeholder line. */
 async function getHistory(coin, days){
   const key = coin.ticker + '-' + days;
   if(historyCache[key]) return historyCache[key];
 
   if(coin.cgId){
-    try{
-      const url = `https://api.coingecko.com/api/v3/coins/${coin.cgId}/market_chart?vs_currency=usd&days=${days}`;
-      const res = await fetch(url);
-      if(!res.ok) throw new Error('bad response');
-      const data = await res.json();
-      if(!data.prices || !data.prices.length) throw new Error('empty');
-      const series = data.prices.map(([t,price]) => ({ t, v: price * coin.holdings }));
-      historyCache[key] = series;
-      return series;
-    }catch(e){
-      const fb = generateFallback(coin, days);
-      historyCache[key] = fb;
-      return fb;
+    for(let attempt=0; attempt<2; attempt++){
+      try{
+        const url = `https://api.coingecko.com/api/v3/coins/${coin.cgId}/market_chart?vs_currency=usd&days=${days}`;
+        const res = await fetch(url);
+        if(res.status === 429){ await sleep(1200); continue; }
+        if(!res.ok) throw new Error('bad response');
+        const data = await res.json();
+        if(!data.prices || !data.prices.length) throw new Error('empty');
+        const series = data.prices.map(([t,price]) => ({ t, v: price * coin.holdings }));
+        historyCache[key] = series;
+        return series;
+      }catch(e){
+        if(attempt === 1){
+          const fb = generateFallback(coin, days);
+          historyCache[key] = fb;
+          return fb;
+        }
+      }
     }
-  }else{
-    const fb = generateFallback(coin, days);
-    historyCache[key] = fb;
-    return fb;
   }
+  const fb = generateFallback(coin, days);
+  historyCache[key] = fb;
+  return fb;
 }
 
-/* ============ LIVE PRICE REFRESH — same rotation idea as your Apps Script ============ */
-/* CoinGecko public endpoint first (no key needed for this basic call); if it's
-   unavailable or rate-limited, fall back to Coinpaprika per coin, same as "Tracker" v6.
-   Note: I'm deliberately not hardcoding your CoinGecko demo API keys in this file —
-   it's client-side code, so anyone who opens or shares the page could read them out
-   of the source. The keyless public endpoint is slower to refresh but keeps your
-   keys private. */
+/* ============ LIVE PRICE + LOGO REFRESH ============
+   One batched CoinGecko /coins/markets call covers price AND logo for all 9
+   coins at once, instead of ~10 separate requests — that was the real cause
+   of the 6-month ALGO chart looking off: the burst of per-coin calls used up
+   the rate-limit budget right before the chart's own request landed.
+   Falls back to Coinpaprika per coin (same rotation idea as your Apps Script)
+   only if the batched call itself fails. */
 const PAPRIKA_IDS = {
   'casper-network':'cspr-casper-network', 'curve-dao-token':'crv-curve-dao-token',
   'algorand':'algo-algorand', 'polkadot':'dot-polkadot', 'silly-goose':'goo-silly-goose',
@@ -383,14 +374,19 @@ const PAPRIKA_IDS = {
 async function refreshLivePrices(){
   const idList = coins.filter(c=>c.cgId).map(c=>c.cgId).join(',');
   try{
-    const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${idList}&vs_currencies=usd`);
+    const res = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${idList}`);
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+    const byId = {};
+    data.forEach(d => byId[d.id] = d);
     let missing = [];
     coins.forEach(c => {
       if(!c.cgId) return;
-      if(data[c.cgId] && typeof data[c.cgId].usd === 'number') c.price = data[c.cgId].usd;
-      else missing.push(c);
+      const d = byId[c.cgId];
+      if(d && typeof d.current_price === 'number'){
+        c.price = d.current_price;
+        if(!c.icon && d.image) c.icon = d.image;
+      }else missing.push(c);
     });
     if(missing.length) await refreshFromPaprika(missing);
   }catch(e){
@@ -593,15 +589,18 @@ window.addEventListener('resize', resizeCanvas);
 /* ============ INIT ============ */
 recompute();
 renderList();
-renderActive();
-Promise.all(coins.map(resolveMeta)).then(() => {
+renderActive(); // fires the chart's own market_chart request first, uncontested
+
+resolveIcons().then(() => {
   renderList();
   document.getElementById('asset-icon-inline').innerHTML = iconMarkup(activeCoin);
 });
 refreshLivePrices().then(() => {
   renderList();
+  document.getElementById('asset-icon-inline').innerHTML = iconMarkup(activeCoin);
   updateHeader(activeCoin, currentSeries.length ? currentSeries : [{v:activeCoin.value,t:Date.now()},{v:activeCoin.value,t:Date.now()}]);
 });
+
 </script>
 </body>
 </html>

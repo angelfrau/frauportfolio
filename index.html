@@ -31,7 +31,7 @@
   }
   .wrap{ max-width:520px; margin:0 auto; padding:26px 18px 60px; }
 
-  header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:26px; }
+  header{ display:flex; align-items:center; justify-content:center; margin-bottom:26px; text-align:center; }
   .brand h1{
     font-family:'Cormorant Garamond', serif; font-weight:700; font-style:italic;
     font-size:34px; line-height:1; letter-spacing:.01em; color:var(--ink);
@@ -150,12 +150,39 @@
   .holdings-edit input:focus{ border-bottom-color:var(--gold); }
 
   .total-summary{
-    display:flex; justify-content:space-between; align-items:center;
     background:var(--card-2); border-radius:14px; padding:14px 16px; margin-bottom:16px;
   }
   .total-summary .t-label{ font-size:10.5px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.08em; font-family:'IBM Plex Mono',monospace; }
   .total-summary .t-val{ font-family:'Cormorant Garamond',serif; font-size:42px; font-weight:700; margin-top:2px; }
-  .total-summary .t-val#total-count{ font-size:28px; }
+
+  .variation-grid{
+    display:grid; grid-template-columns:repeat(3, 1fr); gap:6px;
+    margin-top:14px;
+  }
+  .variation-chip{
+    background:var(--card); border-radius:9px; padding:7px 4px; text-align:center;
+  }
+  .variation-chip .vc-label{
+    font-size:9px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.05em;
+    font-family:'IBM Plex Mono',monospace; margin-bottom:3px;
+  }
+  .variation-chip .vc-val{
+    font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:700; color:var(--ink-faint);
+  }
+  .variation-chip .vc-val.pos{ color:var(--green); }
+  .variation-chip .vc-val.neg{ color:var(--red); }
+
+  .total-summary .bottom-row{
+    display:flex; justify-content:flex-end; align-items:center;
+    margin-top:12px; padding-top:12px; border-top:1px solid var(--line);
+  }
+  .global-badge{
+    display:inline-flex; align-items:center; gap:5px;
+    font-family:'IBM Plex Mono',monospace; font-size:14px; font-weight:700;
+    padding:6px 12px; border-radius:20px;
+  }
+  .global-badge.pos{ background:rgba(91,123,74,0.16); color:var(--green); }
+  .global-badge.neg{ background:rgba(181,83,60,0.16); color:var(--red); }
 
   footer{ text-align:center; margin-top:22px; font-size:10.5px; color:var(--ink-faint); line-height:1.6; }
 </style>
@@ -170,13 +197,20 @@
   </header>
 
   <div class="total-summary">
-    <div>
-      <div class="t-label">Total portfolio value</div>
-      <div class="t-val" id="total-val">$0.00</div>
+    <div class="t-label">Total portfolio value</div>
+    <div class="t-val" id="total-val">$0.00</div>
+
+    <div class="variation-grid" id="variation-grid">
+      <div class="variation-chip"><div class="vc-label">1H</div><div class="vc-val" data-key="1h">—</div></div>
+      <div class="variation-chip"><div class="vc-label">24H</div><div class="vc-val" data-key="24h">—</div></div>
+      <div class="variation-chip"><div class="vc-label">1W</div><div class="vc-val" data-key="1w">—</div></div>
+      <div class="variation-chip"><div class="vc-label">1M</div><div class="vc-val" data-key="1m">—</div></div>
+      <div class="variation-chip"><div class="vc-label">1Y</div><div class="vc-val" data-key="1y">—</div></div>
+      <div class="variation-chip"><div class="vc-label">All time</div><div class="vc-val" data-key="all">—</div></div>
     </div>
-    <div style="text-align:right">
-      <div class="t-label">Assets</div>
-      <div class="t-val" id="total-count">9</div>
+    <div class="bottom-row" style="justify-content:flex-end">
+      <input type="hidden" id="invested-input" value="45000">
+      <span class="global-badge" id="global-badge">—</span>
     </div>
   </div>
 
@@ -365,7 +399,62 @@ async function getHistory(coin, days){
   return fb;
 }
 
-/* ============ LIVE PRICE + LOGO REFRESH ============
+/* ============ RAW PRICE HISTORY (unmultiplied) ============
+   Used for the portfolio-wide variation chips and the "since midnight"
+   change per coin — these need actual prices, not position value. */
+const rawHistoryCache = {};
+function generateFallbackRaw(coin, days){
+  const rand = mulberry32(hashStr('raw' + coin.ticker + days));
+  const points = days === 1 ? 60 : 90;
+  const endPrice = coin.price;
+  let walk = []; let p = endPrice * (0.85 + rand()*0.3);
+  for(let i=0;i<points;i++){ p += (rand()-0.5) * endPrice * 0.03; p = Math.max(p, endPrice*0.3); walk.push(p); }
+  walk[walk.length-1] = endPrice;
+  const now = Date.now();
+  const spanMs = days === 1 ? 24*3600*1000 : (days === 'max' ? 730*24*3600*1000 : days*24*3600*1000);
+  return walk.map((price,i) => ({ t: now - spanMs + (spanMs*i/(points-1)), price }));
+}
+
+async function getRawHistory(coin, days){
+  const key = coin.ticker + '-raw-' + days;
+  if(rawHistoryCache[key]) return rawHistoryCache[key];
+  if(coin.cgId){
+    for(let attempt=0; attempt<2; attempt++){
+      try{
+        const url = `https://api.coingecko.com/api/v3/coins/${coin.cgId}/market_chart?vs_currency=usd&days=${days}`;
+        const res = await fetch(url);
+        if(res.status === 429){ await sleep(1000); continue; }
+        if(!res.ok) throw new Error('bad response');
+        const data = await res.json();
+        if(!data.prices || !data.prices.length) throw new Error('empty');
+        const series = data.prices.map(([t,price]) => ({ t, price }));
+        rawHistoryCache[key] = series;
+        return series;
+      }catch(e){
+        if(attempt === 1){
+          const fb = generateFallbackRaw(coin, days);
+          rawHistoryCache[key] = fb;
+          return fb;
+        }
+      }
+    }
+  }
+  const fb = generateFallbackRaw(coin, days);
+  rawHistoryCache[key] = fb;
+  return fb;
+}
+
+function nearestPrice(series, targetTs){
+  if(!series || !series.length) return null;
+  let best = series[0], bestDiff = Math.abs(series[0].t - targetTs);
+  for(const p of series){
+    const d = Math.abs(p.t - targetTs);
+    if(d < bestDiff){ best = p; bestDiff = d; }
+  }
+  return best.price;
+}
+
+
    One batched CoinGecko /coins/markets call covers price AND logo for all 9
    coins at once, instead of ~10 separate requests — that was the real cause
    of the 6-month ALGO chart looking off: the burst of per-coin calls used up
@@ -517,19 +606,116 @@ function updateHeader(coin, series){
   statAbs.className = 'num ' + (up?'pos':'neg');
 }
 
+let eurToUsdRate = null; // fetched once at init; null until resolved
+
 function updateTotals(){
   const total = recompute();
   document.getElementById('total-val').textContent = fmtCompact(total);
-  document.getElementById('total-count').textContent = coins.length;
 
   const altTotal = coins.filter(c=>c.category==='alt').reduce((s,c)=>s+c.value,0);
   const memeTotal = coins.filter(c=>c.category==='meme').reduce((s,c)=>s+c.value,0);
   document.getElementById('alt-subtotal').textContent = fmtCompact(altTotal) + ' · ' + (total?((altTotal/total)*100).toFixed(1):'0') + '%';
   document.getElementById('meme-subtotal').textContent = fmtCompact(memeTotal) + ' · ' + (total?((memeTotal/total)*100).toFixed(1):'0') + '%';
+
+  updateGlobalBadge(total);
   return total;
 }
 
-async function renderActive(){
+function updateGlobalBadge(total){
+  const badge = document.getElementById('global-badge');
+  const investedEUR = parseFloat(document.getElementById('invested-input').value) || 0;
+  if(!investedEUR || !eurToUsdRate){
+    badge.textContent = eurToUsdRate ? '—' : 'loading rate…';
+    badge.className = 'global-badge';
+    return;
+  }
+  const investedUSD = investedEUR * eurToUsdRate;
+  const diff = total - investedUSD;
+  const pct = (diff / investedUSD) * 100;
+  const up = diff >= 0;
+  badge.textContent = (up?'▲ ':'▼ ') + Math.abs(pct).toFixed(2) + '% · ' + (up?'+':'-') + fmtCompact(Math.abs(diff));
+  badge.className = 'global-badge ' + (up?'pos':'neg');
+}
+
+/* ============ PORTFOLIO-WIDE VARIATIONS + "SINCE MIDNIGHT" PER COIN ============
+   Pulls two raw price series per coin: days=1 (fine-grained, for 1H/24H/midnight)
+   and days=max (for 1W/1M/1Y/all-time). Fetched sequentially with small pauses
+   between calls — this is ~18 requests total, so bursting them all at once would
+   just re-trigger the same rate-limit problem the chart had. Runs once at startup
+   and caches everything, so it's a one-time cost per session. */
+async function loadVariations(){
+  const withId = coins.filter(c => c.cgId);
+  for(const c of withId){
+    await getRawHistory(c, 1);
+    await sleep(220);
+  }
+  for(const c of withId){
+    await getRawHistory(c, 'max');
+    await sleep(220);
+  }
+
+  const now = Date.now();
+  const midnight = new Date(); midnight.setHours(0,0,0,0);
+  const targets = {
+    '1h':  now - 3600e3,
+    '24h': now - 86400e3,
+    '1w':  now - 7*86400e3,
+    '1m':  now - 30*86400e3,
+    '1y':  now - 365*86400e3,
+  };
+
+  let pastTotals = { '1h':0, '24h':0, '1w':0, '1m':0, '1y':0 };
+  let allTimeTotal = 0;
+
+  coins.forEach(c => {
+    const fine = rawHistoryCache[c.ticker+'-raw-1'];
+    const long = rawHistoryCache[c.ticker+'-raw-max'];
+
+    if(fine){
+      c.changeSinceMidnight = null;
+      const midnightPrice = nearestPrice(fine, midnight.getTime());
+      if(midnightPrice) c.changeSinceMidnight = ((c.price - midnightPrice) / midnightPrice) * 100;
+      pastTotals['1h']  += (nearestPrice(fine, targets['1h'])  ?? c.price) * c.holdings;
+      pastTotals['24h'] += (nearestPrice(fine, targets['24h']) ?? c.price) * c.holdings;
+    }else{
+      pastTotals['1h']  += c.price * c.holdings;
+      pastTotals['24h'] += c.price * c.holdings;
+    }
+
+    if(long){
+      pastTotals['1w'] += (nearestPrice(long, targets['1w']) ?? c.price) * c.holdings;
+      pastTotals['1m'] += (nearestPrice(long, targets['1m']) ?? c.price) * c.holdings;
+      pastTotals['1y'] += (nearestPrice(long, targets['1y']) ?? c.price) * c.holdings;
+      allTimeTotal += long[0].price * c.holdings;
+    }else{
+      pastTotals['1w'] += c.price * c.holdings;
+      pastTotals['1m'] += c.price * c.holdings;
+      pastTotals['1y'] += c.price * c.holdings;
+      allTimeTotal += c.price * c.holdings;
+    }
+  });
+
+  const currentTotal = coins.reduce((s,c)=>s+c.value,0);
+  const grid = document.getElementById('variation-grid');
+  const setChip = (key, past) => {
+    const el = grid.querySelector(`[data-key="${key}"]`);
+    if(!past){ el.textContent = '—'; return; }
+    const pct = ((currentTotal - past) / past) * 100;
+    const up = pct >= 0;
+    el.textContent = (up?'▲':'▼') + ' ' + Math.abs(pct).toFixed(1) + '%';
+    el.className = 'vc-val ' + (up?'pos':'neg');
+  };
+  setChip('1h', pastTotals['1h']);
+  setChip('24h', pastTotals['24h']);
+  setChip('1w', pastTotals['1w']);
+  setChip('1m', pastTotals['1m']);
+  setChip('1y', pastTotals['1y']);
+  setChip('all', allTimeTotal);
+
+  renderList(); // refresh the "since midnight" badges in the coin rows
+}
+
+
   const series = await getHistory(activeCoin, activeDays);
   currentSeries = series;
   resizeCanvas();
@@ -540,7 +726,7 @@ async function renderActive(){
 function buildRow(c){
   const row = document.createElement('div');
   row.className = 'asset-row' + (c.ticker === activeCoin.ticker ? ' active' : '');
-  const chg = c.change24h;
+  const chg = c.changeSinceMidnight;
   const chgHtml = chg === null || chg === undefined
     ? `<span class="row-badge">—</span>`
     : `<span class="row-badge ${chg>=0?'pos':'neg'}">${chg>=0?'▲':'▼'} ${Math.abs(chg).toFixed(2)}%</span>`;
@@ -600,6 +786,18 @@ document.querySelectorAll('.range-btn').forEach(btn => {
 
 window.addEventListener('resize', resizeCanvas);
 
+/* ============ EUR → USD RATE (for the "invested" comparison) ============ */
+async function fetchEurUsdRate(){
+  try{
+    const res = await fetch('https://api.frankfurter.app/latest?from=EUR&to=USD');
+    if(!res.ok) throw new Error('bad');
+    const data = await res.json();
+    if(data.rates && typeof data.rates.USD === 'number') eurToUsdRate = data.rates.USD;
+  }catch(e){ /* leave null — badge shows "loading rate…" until it works */ }
+}
+
+document.getElementById('invested-input').addEventListener('input', () => updateTotals());
+
 /* ============ INIT ============ */
 recompute();
 renderList();
@@ -614,6 +812,8 @@ refreshLivePrices().then(() => {
   document.getElementById('asset-icon-inline').innerHTML = iconMarkup(activeCoin);
   updateHeader(activeCoin, currentSeries.length ? currentSeries : [{v:activeCoin.value,t:Date.now()},{v:activeCoin.value,t:Date.now()}]);
 });
+fetchEurUsdRate().then(() => updateTotals());
+loadVariations();
 
 </script>
 </body>

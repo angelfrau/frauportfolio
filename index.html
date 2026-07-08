@@ -54,30 +54,30 @@
     box-shadow:0 1px 0 rgba(255,255,255,.6) inset, 0 10px 24px -18px rgba(59,42,30,.35);
   }
 
-  .chart-head{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px; }
-  .asset-tag{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+  .chart-head{ display:flex; flex-direction:column; gap:12px; margin-bottom:4px; }
+  .asset-tag{ display:flex; align-items:center; gap:8px; margin-bottom:0; }
   .asset-tag .icon-slot{ width:20px; height:20px; border-radius:50%; overflow:hidden; flex:none; }
   .asset-tag .icon-slot img{ width:100%; height:100%; object-fit:contain; }
   .asset-tag .mono{
     width:100%; height:100%; display:flex; align-items:center; justify-content:center;
     font-family:'Cormorant Garamond',serif; font-weight:700; font-size:9px; color:#fff;
   }
-  .asset-tag span.name{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-muted); letter-spacing:.04em; }
+  .asset-tag span.name{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-muted); letter-spacing:.04em; white-space:nowrap; }
   .value{ font-family:'Cormorant Garamond',serif; font-size:26px; font-weight:700; letter-spacing:.01em; color:var(--ink-muted); }
-  .badge-row{ display:flex; align-items:center; gap:8px; margin-top:8px; }
+  .badge-row{ display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }
   .badge{
-    display:inline-flex; align-items:center; gap:4px;
+    display:inline-flex; align-items:center; gap:4px; white-space:nowrap;
     padding:4px 9px; border-radius:20px; font-size:12px; font-weight:600;
     font-family:'IBM Plex Mono',monospace;
   }
   .badge.pos{ background:rgba(91,123,74,0.14); color:var(--green); }
   .badge.neg{ background:rgba(181,83,60,0.14); color:var(--red); }
-  .range-label{ font-size:12px; color:var(--ink-faint); }
+  .range-label{ font-size:12px; color:var(--ink-faint); white-space:nowrap; }
 
-  .ranges{ display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end; max-width:210px; }
+  .ranges{ display:grid; grid-template-columns:repeat(6, 1fr); gap:5px; width:100%; max-width:none; }
   .range-btn{
     background:transparent; border:1px solid var(--line); color:var(--ink-muted);
-    font-family:'IBM Plex Mono',monospace; font-size:10.5px; padding:5px 8px;
+    font-family:'IBM Plex Mono',monospace; font-size:10.5px; padding:7px 2px; text-align:center;
     border-radius:8px; cursor:pointer; transition:all .15s ease;
   }
   .range-btn.active{ background:var(--gold); border-color:var(--gold); color:#fff; }
@@ -156,18 +156,20 @@
   .total-summary .t-val{ font-family:'Cormorant Garamond',serif; font-size:42px; font-weight:700; margin-top:2px; }
 
   .variation-grid{
-    display:grid; grid-template-columns:repeat(3, 1fr); gap:6px;
-    margin-top:14px;
+    display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;
+    margin-top:16px;
   }
   .variation-chip{
-    background:var(--card); border-radius:9px; padding:7px 4px; text-align:center;
+    background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:11px 6px; text-align:center;
+    display:flex; flex-direction:column; align-items:center; gap:5px;
   }
   .variation-chip .vc-label{
-    font-size:9px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.05em;
-    font-family:'IBM Plex Mono',monospace; margin-bottom:3px;
+    font-size:9.5px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.06em;
+    font-family:'IBM Plex Mono',monospace;
   }
   .variation-chip .vc-val{
-    font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:700; color:var(--ink-faint);
+    font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:700; color:var(--ink-faint);
   }
   .variation-chip .vc-val.pos{ color:var(--green); }
   .variation-chip .vc-val.neg{ color:var(--red); }
@@ -215,7 +217,7 @@
 
   <div class="card">
     <div class="chart-head">
-      <div>
+      <div class="chart-head-top">
         <div class="asset-tag"><span class="icon-slot" id="asset-icon-inline"></span><span class="name" id="asset-name">ALGORAND · ALGO</span></div>
         <div class="value" id="big-value">$0.00</div>
         <div class="badge-row">
@@ -358,10 +360,15 @@ function generateFallback(coin, days){
 
 function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
-/* Maps a range key to the CoinGecko `days` param. 1h fetches the 1-day series
-   and slices the last hour afterwards; 'all' uses max history. */
+/* Shared cache of raw {t,price} series keyed by coin+resolution. Declared here
+   because getHistory (below) reads it. Keys: "<TICKER>-base1" (days=1) and
+   "<TICKER>-baseMax" (days=max). */
+const rawHistoryCache = {};
+
+/* Maps a range key to the CoinGecko `days` param. */
 const RANGE_DAYS = { '1h':1, '24h':1, '1w':7, '1m':30, '1y':365, 'all':'max' };
 const RANGE_LABELS = { '1h':'Last Hour', '24h':'Last 24h', '1w':'Last Week', '1m':'Last Month', '1y':'Last Year', 'all':'All Time' };
+const RANGE_CUTOFF_MS = { '1h':3600e3, '24h':86400e3, '1w':7*86400e3, '1m':30*86400e3, '1y':365*86400e3 };
 
 /* Drops corrupt points: non-finite values, zeros, and lone end-spikes where the
    last sample collapses to a fraction of the prior one (CoinGecko sometimes
@@ -375,86 +382,77 @@ function sanitizeSeries(series, valueKey){
   return s;
 }
 
-/* ============ FETCH LIVE HISTORY ============
-   The chart is the one thing that has to be right, so this gets one retry
-   (CoinGecko's public tier rate-limits in short bursts) before ever falling
-   back to the synthetic placeholder line. */
+/* Raw fetch of one CoinGecko market_chart series, with real retries on 429.
+   Returns array of {t, price} or null if it genuinely couldn't get real data.
+   NO synthetic fallback here — fake data was causing the 1H spikes and the
+   identical 1Y/ALL charts. Better to show nothing than to lie. */
+async function fetchChart(coin, days){
+  if(!coin.cgId) return null;
+  for(let attempt=0; attempt<4; attempt++){
+    try{
+      const url = `https://api.coingecko.com/api/v3/coins/${coin.cgId}/market_chart?vs_currency=usd&days=${days}`;
+      const res = await fetch(url);
+      if(res.status === 429){ await sleep(1500 + attempt*800); continue; }
+      if(!res.ok) throw new Error('bad response');
+      const data = await res.json();
+      if(!data.prices || !data.prices.length) throw new Error('empty');
+      return sanitizeSeries(data.prices.map(([t,price]) => ({ t, price })), 'price');
+    }catch(e){ if(attempt === 3) return null; await sleep(600); }
+  }
+  return null;
+}
+
+/* ============ FETCH LIVE HISTORY (per range) ============
+   Strategy: fetch the two "base" resolutions once each and cache them —
+   days=1 (fine, ~5min steps) for 1H/24H, and days=max (daily steps) for
+   everything longer. Each range then just slices its window out of the right
+   base series. This means 1Y and ALL are genuinely different (ALL = full max
+   history, 1Y = last 365 days of it), and 1H is a real slice of intraday data,
+   not synthetic noise. */
 async function getHistory(coin, rangeKey){
   const key = coin.ticker + '-' + rangeKey;
   if(historyCache[key]) return historyCache[key];
-  const days = RANGE_DAYS[rangeKey];
 
-  let series = null;
-  if(coin.cgId){
-    for(let attempt=0; attempt<2; attempt++){
-      try{
-        const url = `https://api.coingecko.com/api/v3/coins/${coin.cgId}/market_chart?vs_currency=usd&days=${days}`;
-        const res = await fetch(url);
-        if(res.status === 429){ await sleep(1200); continue; }
-        if(!res.ok) throw new Error('bad response');
-        const data = await res.json();
-        if(!data.prices || !data.prices.length) throw new Error('empty');
-        series = data.prices.map(([t,price]) => ({ t, v: price * coin.holdings }));
-        break;
-      }catch(e){ if(attempt === 1) series = null; }
-    }
+  const useFine = (rangeKey === '1h' || rangeKey === '24h');
+  const baseKey = coin.ticker + (useFine ? '-base1' : '-baseMax');
+  let base = rawHistoryCache[baseKey];
+  if(!base){
+    base = await fetchChart(coin, useFine ? 1 : 'max');
+    if(base) rawHistoryCache[baseKey] = base;
   }
-  if(!series) series = generateFallback(coin, typeof days === 'number' ? days : 365);
 
-  series = sanitizeSeries(series, 'v');
-  if(rangeKey === '1h'){
-    const cutoff = Date.now() - 3600e3;
-    const sliced = series.filter(p => p.t >= cutoff);
-    if(sliced.length >= 2) series = sliced;
-    else series = series.slice(-4); // fallback if fewer than 2 points in the hour
+  let series;
+  if(base){
+    let pts = base;
+    if(RANGE_CUTOFF_MS[rangeKey]){
+      const cutoff = Date.now() - RANGE_CUTOFF_MS[rangeKey];
+      const sliced = base.filter(p => p.t >= cutoff);
+      pts = sliced.length >= 2 ? sliced : base.slice(-2);
+    }
+    series = pts.map(p => ({ t: p.t, v: p.price * coin.holdings }));
+  }else{
+    // No real data at all (offline / rate-limited hard) — flat honest line at
+    // the current value, so the card still renders without inventing a trend.
+    const now = Date.now();
+    const span = RANGE_CUTOFF_MS[rangeKey] || 86400e3;
+    series = [{ t: now-span, v: coin.value }, { t: now, v: coin.value }];
   }
   historyCache[key] = series;
   return series;
 }
 
 /* ============ RAW PRICE HISTORY (unmultiplied) ============
-   Used for the portfolio-wide variation chips and the "since midnight"
-   change per coin — these need actual prices, not position value. */
-const rawHistoryCache = {};
-function generateFallbackRaw(coin, days){
-  const rand = mulberry32(hashStr('raw' + coin.ticker + days));
-  const points = days === 1 ? 60 : 90;
-  const endPrice = coin.price;
-  let walk = []; let p = endPrice * (0.85 + rand()*0.3);
-  for(let i=0;i<points;i++){ p += (rand()-0.5) * endPrice * 0.03; p = Math.max(p, endPrice*0.3); walk.push(p); }
-  walk[walk.length-1] = endPrice;
-  const now = Date.now();
-  const spanMs = days === 1 ? 24*3600*1000 : (days === 'max' ? 730*24*3600*1000 : days*24*3600*1000);
-  return walk.map((price,i) => ({ t: now - spanMs + (spanMs*i/(points-1)), price }));
-}
-
-async function getRawHistory(coin, days){
-  const key = coin.ticker + '-raw-' + days;
-  if(rawHistoryCache[key]) return rawHistoryCache[key];
-  if(coin.cgId){
-    for(let attempt=0; attempt<2; attempt++){
-      try{
-        const url = `https://api.coingecko.com/api/v3/coins/${coin.cgId}/market_chart?vs_currency=usd&days=${days}`;
-        const res = await fetch(url);
-        if(res.status === 429){ await sleep(1000); continue; }
-        if(!res.ok) throw new Error('bad response');
-        const data = await res.json();
-        if(!data.prices || !data.prices.length) throw new Error('empty');
-        const series = sanitizeSeries(data.prices.map(([t,price]) => ({ t, price })), 'price');
-        rawHistoryCache[key] = series;
-        return series;
-      }catch(e){
-        if(attempt === 1){
-          const fb = generateFallbackRaw(coin, days);
-          rawHistoryCache[key] = fb;
-          return fb;
-        }
-      }
-    }
-  }
-  const fb = generateFallbackRaw(coin, days);
-  rawHistoryCache[key] = fb;
-  return fb;
+   Used for the portfolio-wide variation chips and the "since midnight" change
+   per coin. Reuses the SAME base series getHistory already fetched/cached, so
+   the whole app makes at most 2 chart calls per coin (days=1 and days=max),
+   not one per range. No synthetic fallback — if a coin has no real data its
+   variation cells just show "—". */
+async function ensureBase(coin, fine){
+  const baseKey = coin.ticker + (fine ? '-base1' : '-baseMax');
+  if(rawHistoryCache[baseKey]) return rawHistoryCache[baseKey];
+  const data = await fetchChart(coin, fine ? 1 : 'max');
+  if(data) rawHistoryCache[baseKey] = data;
+  return data;
 }
 
 function nearestPrice(series, targetTs){
@@ -649,20 +647,17 @@ function updateGlobalBadge(total){
 }
 
 /* ============ PORTFOLIO-WIDE VARIATIONS + "SINCE MIDNIGHT" PER COIN ============
-   Pulls two raw price series per coin: days=1 (fine-grained, for 1H/24H/midnight)
-   and days=max (for 1W/1M/1Y/all-time). Fetched sequentially with small pauses
-   between calls — this is ~18 requests total, so bursting them all at once would
-   just re-trigger the same rate-limit problem the chart had. Runs once at startup
-   and caches everything, so it's a one-time cost per session. */
+   Reuses the two base series per coin (days=1 fine, days=max long) that the
+   chart also uses — so no extra API calls beyond what the charts already need.
+   Fetched in small batches to stay under the rate limit, updating chips
+   progressively as each batch lands. */
 async function loadVariations(){
   const withId = coins.filter(c => c.cgId);
   const BATCH = 3;
   for(let i=0; i<withId.length; i+=BATCH){
     const batch = withId.slice(i, i+BATCH);
-    await Promise.all(batch.flatMap(c => [ getRawHistory(c, 1), getRawHistory(c, 'max') ]));
-    if(i+BATCH < withId.length) await sleep(250);
-    // Update chips/badges progressively as each batch lands, instead of
-    // waiting for all 9 coins before showing anything.
+    await Promise.all(batch.flatMap(c => [ ensureBase(c, true), ensureBase(c, false) ]));
+    if(i+BATCH < withId.length) await sleep(300);
     computeAndRenderVariations();
   }
 }
@@ -678,34 +673,24 @@ function computeAndRenderVariations(){
     '1y':  now - 365*86400e3,
   };
 
-  let pastTotals = { '1h':0, '24h':0, '1w':0, '1m':0, '1y':0 };
-  let allTimeTotal = 0;
+  let pastTotals = { '1h':null, '24h':null, '1w':null, '1m':null, '1y':null };
+  const addPast = (k, v) => { pastTotals[k] = (pastTotals[k] || 0) + v; };
 
   coins.forEach(c => {
-    const fine = rawHistoryCache[c.ticker+'-raw-1'];
-    const long = rawHistoryCache[c.ticker+'-raw-max'];
+    const fine = rawHistoryCache[c.ticker+'-base1'];
+    const long = rawHistoryCache[c.ticker+'-baseMax'];
 
     if(fine){
-      c.changeSinceMidnight = null;
       const midnightPrice = nearestPrice(fine, midnight.getTime());
-      if(midnightPrice) c.changeSinceMidnight = ((c.price - midnightPrice) / midnightPrice) * 100;
-      pastTotals['1h']  += (nearestPrice(fine, targets['1h'])  ?? c.price) * c.holdings;
-      pastTotals['24h'] += (nearestPrice(fine, targets['24h']) ?? c.price) * c.holdings;
-    }else{
-      pastTotals['1h']  += c.price * c.holdings;
-      pastTotals['24h'] += c.price * c.holdings;
+      c.changeSinceMidnight = midnightPrice ? ((c.price - midnightPrice) / midnightPrice) * 100 : null;
+      addPast('1h',  (nearestPrice(fine, targets['1h'])  ?? c.price) * c.holdings);
+      addPast('24h', (nearestPrice(fine, targets['24h']) ?? c.price) * c.holdings);
     }
 
     if(long){
-      pastTotals['1w'] += (nearestPrice(long, targets['1w']) ?? c.price) * c.holdings;
-      pastTotals['1m'] += (nearestPrice(long, targets['1m']) ?? c.price) * c.holdings;
-      pastTotals['1y'] += (nearestPrice(long, targets['1y']) ?? c.price) * c.holdings;
-      allTimeTotal += long[0].price * c.holdings;
-    }else{
-      pastTotals['1w'] += c.price * c.holdings;
-      pastTotals['1m'] += c.price * c.holdings;
-      pastTotals['1y'] += c.price * c.holdings;
-      allTimeTotal += c.price * c.holdings;
+      addPast('1w', (nearestPrice(long, targets['1w']) ?? c.price) * c.holdings);
+      addPast('1m', (nearestPrice(long, targets['1m']) ?? c.price) * c.holdings);
+      addPast('1y', (nearestPrice(long, targets['1y']) ?? c.price) * c.holdings);
     }
   });
 

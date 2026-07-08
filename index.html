@@ -483,7 +483,7 @@ const PAPRIKA_IDS = {
 async function refreshLivePrices(){
   const idList = coins.filter(c=>c.cgId).map(c=>c.cgId).join(',');
   try{
-    const res = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${idList}&price_change_percentage=24h`);
+    const res = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${idList}&price_change_percentage=1h,24h,7d,30d,1y`);
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     const byId = {};
@@ -494,8 +494,16 @@ async function refreshLivePrices(){
       const d = byId[c.cgId];
       if(d && typeof d.current_price === 'number'){
         c.price = d.current_price;
-        c.change24h = typeof d.price_change_percentage_24h === 'number' ? d.price_change_percentage_24h : null;
         if(d.image) c.icon = d.image;
+        // CoinGecko returns each coin's own % change over these windows — used to
+        // reconstruct past portfolio value without any history calls.
+        c.pctChange = {
+          '1h': d.price_change_percentage_1h_in_currency,
+          '24h': d.price_change_percentage_24h_in_currency,
+          '1w': d.price_change_percentage_7d_in_currency,
+          '1m': d.price_change_percentage_30d_in_currency,
+          '1y': d.price_change_percentage_1y_in_currency,
+        };
       }else missing.push(c);
     });
     if(missing.length) await refreshFromPaprika(missing);
@@ -646,72 +654,61 @@ function updateGlobalBadge(total){
   badge.className = 'global-badge ' + (up?'pos':'neg');
 }
 
-/* ============ PORTFOLIO-WIDE VARIATIONS + "SINCE MIDNIGHT" PER COIN ============
-   Reuses the two base series per coin (days=1 fine, days=max long) that the
-   chart also uses — so no extra API calls beyond what the charts already need.
-   Fetched in small batches to stay under the rate limit, updating chips
-   progressively as each batch lands. */
-async function loadVariations(){
-  const withId = coins.filter(c => c.cgId);
-  const BATCH = 3;
-  for(let i=0; i<withId.length; i+=BATCH){
-    const batch = withId.slice(i, i+BATCH);
-    await Promise.all(batch.flatMap(c => [ ensureBase(c, true), ensureBase(c, false) ]));
-    if(i+BATCH < withId.length) await sleep(300);
-    computeAndRenderVariations();
-  }
-}
-
-function computeAndRenderVariations(){
-  const now = Date.now();
-  const midnight = new Date(); midnight.setHours(0,0,0,0);
-  const targets = {
-    '1h':  now - 3600e3,
-    '24h': now - 86400e3,
-    '1w':  now - 7*86400e3,
-    '1m':  now - 30*86400e3,
-    '1y':  now - 365*86400e3,
-  };
-
-  let pastTotals = { '1h':null, '24h':null, '1w':null, '1m':null, '1y':null };
-  const addPast = (k, v) => { pastTotals[k] = (pastTotals[k] || 0) + v; };
-
-  coins.forEach(c => {
-    const fine = rawHistoryCache[c.ticker+'-base1'];
-    const long = rawHistoryCache[c.ticker+'-baseMax'];
-
-    if(fine){
-      const midnightPrice = nearestPrice(fine, midnight.getTime());
-      c.changeSinceMidnight = midnightPrice ? ((c.price - midnightPrice) / midnightPrice) * 100 : null;
-      addPast('1h',  (nearestPrice(fine, targets['1h'])  ?? c.price) * c.holdings);
-      addPast('24h', (nearestPrice(fine, targets['24h']) ?? c.price) * c.holdings);
-    }
-
-    if(long){
-      addPast('1w', (nearestPrice(long, targets['1w']) ?? c.price) * c.holdings);
-      addPast('1m', (nearestPrice(long, targets['1m']) ?? c.price) * c.holdings);
-      addPast('1y', (nearestPrice(long, targets['1y']) ?? c.price) * c.holdings);
-    }
+/* ============ PORTFOLIO-WIDE VARIATION CHIPS ============
+   Reconstructs past portfolio value from each coin's own % change (which the
+   markets call already gave us) — NO history calls, and always same-subset:
+   pastValue and currentValue are summed over exactly the same coins, so the
+   percentage is correct even while data is still arriving. */
+function computeVariations(){
+  const grid = document.getElementById('variation-grid');
+  ['1h','24h','1w','1m','1y'].forEach(k => {
+    let pastSum = 0, curSum = 0, n = 0;
+    coins.forEach(c => {
+      const pct = c.pctChange && c.pctChange[k];
+      if(typeof pct === 'number' && isFinite(pct) && (1 + pct/100) > 0){
+        pastSum += c.value / (1 + pct/100);
+        curSum  += c.value;
+        n++;
+      }
+    });
+    const el = grid.querySelector(`[data-key="${k}"]`);
+    if(n === 0 || pastSum <= 0){ el.textContent = '—'; el.className = 'vc-val'; return; }
+    const p = ((curSum - pastSum) / pastSum) * 100;
+    const up = p >= 0;
+    el.textContent = (up?'▲':'▼') + ' ' + Math.abs(p).toFixed(1) + '%';
+    el.className = 'vc-val ' + (up?'pos':'neg');
   });
 
-  const currentTotal = coins.reduce((s,c)=>s+c.value,0);
-  const grid = document.getElementById('variation-grid');
-  const setChip = (key, past) => {
-    const el = grid.querySelector(`[data-key="${key}"]`);
-    if(!past){ el.textContent = '—'; return; }
-    const pct = ((currentTotal - past) / past) * 100;
-    const up = pct >= 0;
-    el.textContent = (up?'▲':'▼') + ' ' + Math.abs(pct).toFixed(1) + '%';
-    el.className = 'vc-val ' + (up?'pos':'neg');
-  };
-  setChip('1h', pastTotals['1h']);
-  setChip('24h', pastTotals['24h']);
-  setChip('1w', pastTotals['1w']);
-  setChip('1m', pastTotals['1m']);
-  setChip('1y', pastTotals['1y']);
-  setChip('all', totalInvested); // All time = vs money actually invested → matches the badge below
+  // All time = current total vs money actually invested (matches the badge below).
+  const total = coins.reduce((s,c)=>s+c.value,0);
+  const el = grid.querySelector('[data-key="all"]');
+  const p = totalInvested ? ((total - totalInvested) / totalInvested) * 100 : 0;
+  const up = p >= 0;
+  el.textContent = (up?'▲':'▼') + ' ' + Math.abs(p).toFixed(1) + '%';
+  el.className = 'vc-val ' + (up?'pos':'neg');
+}
 
-  renderList(); // refresh the "since midnight" badges in the coin rows
+/* ============ "SINCE MIDNIGHT" BADGES (coin list) ============
+   Needs each coin's price at 00:00 today, which only intraday history has.
+   Loads the days=1 series per coin gently in the background, in small batches,
+   AFTER the chips and prices are already on screen. Until a coin's series is in,
+   its list badge falls back to the 24h figure from the markets call. */
+async function loadMidnightBadges(){
+  const withId = coins.filter(c => c.cgId);
+  const midnight = new Date(); midnight.setHours(0,0,0,0);
+  const BATCH = 2;
+  for(let i=0; i<withId.length; i+=BATCH){
+    const batch = withId.slice(i, i+BATCH);
+    await Promise.all(batch.map(async c => {
+      const base = await ensureBase(c, true);
+      if(base){
+        const mp = nearestPrice(base, midnight.getTime());
+        if(mp) c.changeSinceMidnight = ((c.price - mp) / mp) * 100;
+      }
+    }));
+    renderList();
+    if(i+BATCH < withId.length) await sleep(500);
+  }
 }
 
 async function renderActive(){
@@ -725,7 +722,9 @@ async function renderActive(){
 function buildRow(c){
   const row = document.createElement('div');
   row.className = 'asset-row' + (c.ticker === activeCoin.ticker ? ' active' : '');
-  const chg = c.changeSinceMidnight;
+  const chg = (c.changeSinceMidnight !== null && c.changeSinceMidnight !== undefined)
+    ? c.changeSinceMidnight
+    : (c.pctChange && typeof c.pctChange['24h'] === 'number' ? c.pctChange['24h'] : null);
   const chgHtml = chg === null || chg === undefined
     ? `<span class="row-badge">—</span>`
     : `<span class="row-badge ${chg>=0?'pos':'neg'}">${chg>=0?'▲':'▼'} ${Math.abs(chg).toFixed(2)}%</span>`;
@@ -788,14 +787,17 @@ window.addEventListener('resize', resizeCanvas);
 /* ============ INIT ============ */
 recompute();
 renderList();
-renderActive(); // fires the chart's own market_chart request first, uncontested
+computeVariations();       // shows chips as "—" until prices arrive
+renderActive();            // active coin's chart — its own request
 
 refreshLivePrices().then(() => {
+  recompute();
   renderList();
+  computeVariations();     // now correct: uses real per-coin % changes
   document.getElementById('asset-icon-inline').innerHTML = iconMarkup(activeCoin);
-  updateHeader(activeCoin, currentSeries.length ? currentSeries : [{v:activeCoin.value,t:Date.now()},{v:activeCoin.value,t:Date.now()}]);
+  renderActive();          // re-render chart with fresh prices
+  loadMidnightBadges();    // gentle background fill for the "since midnight" list badges
 });
-loadVariations();
 
 </script>
 </body>

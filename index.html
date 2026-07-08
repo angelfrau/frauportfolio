@@ -455,6 +455,7 @@ function nearestPrice(series, targetTs){
 }
 
 
+/* ============ LIVE PRICE + LOGO REFRESH ============
    One batched CoinGecko /coins/markets call covers price AND logo for all 9
    coins at once, instead of ~10 separate requests — that was the real cause
    of the 6-month ALGO chart looking off: the burst of per-coin calls used up
@@ -715,7 +716,7 @@ async function loadVariations(){
   renderList(); // refresh the "since midnight" badges in the coin rows
 }
 
-
+async function renderActive(){
   const series = await getHistory(activeCoin, activeDays);
   currentSeries = series;
   resizeCanvas();
@@ -818,4 +819,3 @@ loadVariations();
 </script>
 </body>
 </html>
-

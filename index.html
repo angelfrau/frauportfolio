@@ -74,10 +74,10 @@
   .badge.neg{ background:rgba(181,83,60,0.14); color:var(--red); }
   .range-label{ font-size:12px; color:var(--ink-faint); }
 
-  .ranges{ display:flex; gap:6px; }
+  .ranges{ display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end; max-width:210px; }
   .range-btn{
     background:transparent; border:1px solid var(--line); color:var(--ink-muted);
-    font-family:'IBM Plex Mono',monospace; font-size:11px; padding:6px 11px;
+    font-family:'IBM Plex Mono',monospace; font-size:10.5px; padding:5px 8px;
     border-radius:8px; cursor:pointer; transition:all .15s ease;
   }
   .range-btn.active{ background:var(--gold); border-color:var(--gold); color:#fff; }
@@ -209,7 +209,6 @@
       <div class="variation-chip"><div class="vc-label">All time</div><div class="vc-val" data-key="all">—</div></div>
     </div>
     <div class="bottom-row" style="justify-content:flex-end">
-      <input type="hidden" id="invested-input" value="45000">
       <span class="global-badge" id="global-badge">—</span>
     </div>
   </div>
@@ -225,9 +224,12 @@
         </div>
       </div>
       <div class="ranges" id="ranges">
-        <button class="range-btn" data-days="30">1M</button>
-        <button class="range-btn" data-days="182">6M</button>
-        <button class="range-btn active" data-days="365">1Y</button>
+        <button class="range-btn" data-range="1h">1H</button>
+        <button class="range-btn" data-range="24h">24H</button>
+        <button class="range-btn" data-range="1w">1W</button>
+        <button class="range-btn" data-range="1m">1M</button>
+        <button class="range-btn active" data-range="1y">1Y</button>
+        <button class="range-btn" data-range="all">ALL</button>
       </div>
     </div>
 
@@ -272,19 +274,20 @@
 <script>
 /* ============ PORTFOLIO DATA (editable holdings) ============ */
 const coins = [
-  {ticker:'ALGO',   name:'Algorand',        exchange:'Kraken',  holdings:81903,        price:0.086,       color:'#C9973F', cgId:'algorand',       category:'alt'},
-  {ticker:'DOT',    name:'Polkadot',        exchange:'Kraken',  holdings:3527,         price:0.86,        color:'#8B7CC8', cgId:'polkadot',        category:'alt'},
-  {ticker:'CRV',    name:'Curve DAO',       exchange:'Kraken',  holdings:14235,        price:0.206,       color:'#5B7B9E', cgId:'curve-dao-token', category:'alt'},
-  {ticker:'CSPR',   name:'Casper',          exchange:'MEXC',    holdings:725880,       price:0.0019,      color:'#B5533C', cgId:'casper-network',  category:'alt'},
-  {ticker:'GALA',   name:'Gala',            exchange:'Kraken',  holdings:45129,        price:0.00220,     color:'#C9A356', cgId:'gala',             category:'alt'},
-  {ticker:'POPCAT', name:'Popcat',          exchange:'Kraken',  holdings:11953,        price:0.0484,      color:'#C88A9E', cgId:'popcat',           category:'meme'},
-  {ticker:'USA',    name:'American Coin',   exchange:'Jupiter', holdings:6121912246,   price:0.000000221, color:'#6B8FBF', cgId:'american-coin',    category:'meme'},
-  {ticker:'GOO',    name:'Silly Goose',     exchange:'Jupiter', holdings:3499676,      price:0.00009,     color:'#7FA26B', cgId:'silly-goose',      category:'meme'},
-  {ticker:'TREMP',  name:'Donald Tremp',    exchange:'Jupiter', holdings:38765,        price:0.0043,      color:'#A98BC9', cgId:'donald-tremp',     category:'meme'},
+  {ticker:'ALGO',   name:'Algorand',        exchange:'Kraken',  holdings:81903,        price:0.086,       color:'#C9973F', cgId:'algorand',       category:'alt',  invested:9933.66},
+  {ticker:'DOT',    name:'Polkadot',        exchange:'Kraken',  holdings:3527,         price:0.86,        color:'#8B7CC8', cgId:'polkadot',        category:'alt',  invested:9593.91},
+  {ticker:'CRV',    name:'Curve DAO',       exchange:'Kraken',  holdings:14235,        price:0.206,       color:'#5B7B9E', cgId:'curve-dao-token', category:'alt',  invested:5979.01},
+  {ticker:'CSPR',   name:'Casper',          exchange:'MEXC',    holdings:725880,       price:0.0019,      color:'#B5533C', cgId:'casper-network',  category:'alt',  invested:4096.86},
+  {ticker:'GALA',   name:'Gala',            exchange:'Kraken',  holdings:45129,        price:0.00220,     color:'#C9A356', cgId:'gala',             category:'alt',  invested:842.66},
+  {ticker:'POPCAT', name:'Popcat',          exchange:'Kraken',  holdings:11953,        price:0.0484,      color:'#C88A9E', cgId:'popcat',           category:'meme', invested:2079.24},
+  {ticker:'USA',    name:'American Coin',   exchange:'Jupiter', holdings:6121912246,   price:0.000000221, color:'#6B8FBF', cgId:'american-coin',    category:'meme', invested:8295},
+  {ticker:'GOO',    name:'Silly Goose',     exchange:'Jupiter', holdings:3499676,      price:0.00009,     color:'#7FA26B', cgId:'silly-goose',      category:'meme', invested:6200},
+  {ticker:'TREMP',  name:'Donald Tremp',    exchange:'Jupiter', holdings:38765,        price:0.0043,      color:'#A98BC9', cgId:'donald-tremp',     category:'meme', invested:2500},
 ];
+const totalInvested = coins.reduce((s,c)=>s+c.invested,0);
 
 let activeCoin = coins.find(c => c.ticker === 'ALGO');
-let activeDays = 365;
+let activeRange = '1y';
 let historyCache = {};
 
 function recompute(){
@@ -300,35 +303,26 @@ const fmtUSD = n => n < 1
 const fmtCompact = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
 
 /* ============ REAL COIN ICONS ============ */
-/* Source 1: TradingView's own symbol-search + logo CDN — broad coverage, including
-   most memecoins, and doesn't share CoinGecko's rate limit.
-   Source 2: CoinGecko image, used only if TradingView has no logo.
-   Source 3 (in iconMarkup's onerror): plain monogram badge. */
-async function resolveIconTradingView(coin){
-  try{
-    const res = await fetch(`https://symbol-search.tradingview.com/symbol_search/v3/?text=${encodeURIComponent(coin.ticker)}&type=crypto&hl=1&lang=en&domain=production`);
-    if(!res.ok) throw new Error('bad');
-    const data = await res.json();
-    const list = data.symbols || data.symbols_remaining || [];
-    const match = list.find(x => x.symbol && x.symbol.toUpperCase() === coin.ticker.toUpperCase() && x.logoid) || list.find(x => x.logoid);
-    if(match && match.logoid){
-      return `https://s3-symbol-logo.tradingview.com/${match.logoid}.svg`;
-    }
-  }catch(e){ /* CORS or no match — fall through */ }
-  return null;
-}
+/* Primary source: the image URL that comes back from the same CoinGecko
+   /coins/markets call we already make for prices — it's reliable and loads
+   fine in <img> tags. A few known-good hardcoded fallbacks cover the case
+   where that call is rate-limited on first paint. Monogram is the last resort. */
+const ICON_FALLBACKS = {
+  algorand:'https://coin-images.coingecko.com/coins/images/4380/large/download.png',
+  polkadot:'https://coin-images.coingecko.com/coins/images/12171/large/polkadot.png',
+  'curve-dao-token':'https://coin-images.coingecko.com/coins/images/12124/large/Curve.png',
+  'casper-network':'https://coin-images.coingecko.com/coins/images/16279/large/Casper_Symbol_CSPR_Black.png',
+  gala:'https://coin-images.coingecko.com/coins/images/12493/large/GALA_token_image_-_200PNG.png',
+  popcat:'https://coin-images.coingecko.com/coins/images/33760/large/image.jpg'
+};
 
 function iconMarkup(coin){
-  if(coin.icon){
-    return `<img src="${coin.icon}" alt="${coin.ticker}"
+  const src = coin.icon || ICON_FALLBACKS[coin.cgId];
+  if(src){
+    return `<img src="${src}" alt="${coin.ticker}"
       onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'mono',style:'background:${coin.color}',textContent:'${coin.ticker.slice(0,2)}'}))">`;
   }
   return `<span class="mono" style="background:${coin.color}">${coin.ticker.slice(0,2)}</span>`;
-}
-
-async function resolveIcons(){
-  // TradingView logos, one request per coin — different host, doesn't touch CoinGecko's budget.
-  await Promise.all(coins.map(async c => { c.icon = await resolveIconTradingView(c); }));
 }
 
 /* ============ SEEDED FALLBACK GENERATOR ============ */
@@ -364,15 +358,33 @@ function generateFallback(coin, days){
 
 function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
+/* Maps a range key to the CoinGecko `days` param. 1h fetches the 1-day series
+   and slices the last hour afterwards; 'all' uses max history. */
+const RANGE_DAYS = { '1h':1, '24h':1, '1w':7, '1m':30, '1y':365, 'all':'max' };
+const RANGE_LABELS = { '1h':'Last Hour', '24h':'Last 24h', '1w':'Last Week', '1m':'Last Month', '1y':'Last Year', 'all':'All Time' };
+
+/* Drops corrupt points: non-finite values, zeros, and lone end-spikes where the
+   last sample collapses to a fraction of the prior one (CoinGecko sometimes
+   returns a bad final partial candle — that was the fake vertical cliff on ALGO). */
+function sanitizeSeries(series, valueKey){
+  let s = series.filter(p => Number.isFinite(p[valueKey]) && p[valueKey] > 0);
+  while(s.length >= 3){
+    const last = s[s.length-1][valueKey], prev = s[s.length-2][valueKey];
+    if(last < prev*0.35 || last > prev*3){ s = s.slice(0, -1); } else break;
+  }
+  return s;
+}
+
 /* ============ FETCH LIVE HISTORY ============
    The chart is the one thing that has to be right, so this gets one retry
-   (CoinGecko's public tier rate-limits in short bursts — a single retry after
-   a short pause clears most of those) before ever falling back to the
-   synthetic placeholder line. */
-async function getHistory(coin, days){
-  const key = coin.ticker + '-' + days;
+   (CoinGecko's public tier rate-limits in short bursts) before ever falling
+   back to the synthetic placeholder line. */
+async function getHistory(coin, rangeKey){
+  const key = coin.ticker + '-' + rangeKey;
   if(historyCache[key]) return historyCache[key];
+  const days = RANGE_DAYS[rangeKey];
 
+  let series = null;
   if(coin.cgId){
     for(let attempt=0; attempt<2; attempt++){
       try{
@@ -382,21 +394,22 @@ async function getHistory(coin, days){
         if(!res.ok) throw new Error('bad response');
         const data = await res.json();
         if(!data.prices || !data.prices.length) throw new Error('empty');
-        const series = data.prices.map(([t,price]) => ({ t, v: price * coin.holdings }));
-        historyCache[key] = series;
-        return series;
-      }catch(e){
-        if(attempt === 1){
-          const fb = generateFallback(coin, days);
-          historyCache[key] = fb;
-          return fb;
-        }
-      }
+        series = data.prices.map(([t,price]) => ({ t, v: price * coin.holdings }));
+        break;
+      }catch(e){ if(attempt === 1) series = null; }
     }
   }
-  const fb = generateFallback(coin, days);
-  historyCache[key] = fb;
-  return fb;
+  if(!series) series = generateFallback(coin, typeof days === 'number' ? days : 365);
+
+  series = sanitizeSeries(series, 'v');
+  if(rangeKey === '1h'){
+    const cutoff = Date.now() - 3600e3;
+    const sliced = series.filter(p => p.t >= cutoff);
+    if(sliced.length >= 2) series = sliced;
+    else series = series.slice(-4); // fallback if fewer than 2 points in the hour
+  }
+  historyCache[key] = series;
+  return series;
 }
 
 /* ============ RAW PRICE HISTORY (unmultiplied) ============
@@ -427,7 +440,7 @@ async function getRawHistory(coin, days){
         if(!res.ok) throw new Error('bad response');
         const data = await res.json();
         if(!data.prices || !data.prices.length) throw new Error('empty');
-        const series = data.prices.map(([t,price]) => ({ t, price }));
+        const series = sanitizeSeries(data.prices.map(([t,price]) => ({ t, price })), 'price');
         rawHistoryCache[key] = series;
         return series;
       }catch(e){
@@ -484,7 +497,7 @@ async function refreshLivePrices(){
       if(d && typeof d.current_price === 'number'){
         c.price = d.current_price;
         c.change24h = typeof d.price_change_percentage_24h === 'number' ? d.price_change_percentage_24h : null;
-        if(!c.icon && d.image) c.icon = d.image;
+        if(d.image) c.icon = d.image;
       }else missing.push(c);
     });
     if(missing.length) await refreshFromPaprika(missing);
@@ -585,18 +598,24 @@ function updateHeader(coin, series){
   document.getElementById('asset-name').textContent = `${coin.name.toUpperCase()} · ${coin.ticker}`;
 
   const last = series[series.length-1].v;
-  const first = series[0].v;
-  const pct = first ? ((last-first)/first) * 100 : 0;
-  const abs = last - first;
+  document.getElementById('big-value').textContent = fmtCompact(last);
+  document.getElementById('range-label').textContent = RANGE_LABELS[activeRange];
+
+  let pct, abs;
+  if(activeRange === 'all'){
+    // "All time" for a coin = my position's gain/loss vs what I invested in it.
+    abs = coin.value - coin.invested;
+    pct = coin.invested ? (abs / coin.invested) * 100 : 0;
+  }else{
+    const first = series[0].v;
+    pct = first ? ((last-first)/first) * 100 : 0;
+    abs = last - first;
+  }
   const up = pct >= 0;
 
-  document.getElementById('big-value').textContent = fmtCompact(last);
   const badge = document.getElementById('change-badge');
   badge.textContent = (up?'▲ ':'▼ ') + Math.abs(pct).toFixed(2) + '%';
   badge.className = 'badge ' + (up?'pos':'neg');
-
-  const rangeLabels = {30:'Last Month', 182:'Last 6 Months', 365:'Last Year'};
-  document.getElementById('range-label').textContent = rangeLabels[activeDays];
 
   const statPct = document.getElementById('stat-pct');
   statPct.textContent = (up?'+':'') + pct.toFixed(2) + '%';
@@ -606,8 +625,6 @@ function updateHeader(coin, series){
   statAbs.textContent = (up?'+':'-') + fmtCompact(Math.abs(abs));
   statAbs.className = 'num ' + (up?'pos':'neg');
 }
-
-let eurToUsdRate = null; // fetched once at init; null until resolved
 
 function updateTotals(){
   const total = recompute();
@@ -624,15 +641,8 @@ function updateTotals(){
 
 function updateGlobalBadge(total){
   const badge = document.getElementById('global-badge');
-  const investedEUR = parseFloat(document.getElementById('invested-input').value) || 0;
-  if(!investedEUR || !eurToUsdRate){
-    badge.textContent = eurToUsdRate ? '—' : 'loading rate…';
-    badge.className = 'global-badge';
-    return;
-  }
-  const investedUSD = investedEUR * eurToUsdRate;
-  const diff = total - investedUSD;
-  const pct = (diff / investedUSD) * 100;
+  const diff = total - totalInvested;
+  const pct = totalInvested ? (diff / totalInvested) * 100 : 0;
   const up = diff >= 0;
   badge.textContent = (up?'▲ ':'▼ ') + Math.abs(pct).toFixed(2) + '% · ' + (up?'+':'-') + fmtCompact(Math.abs(diff));
   badge.className = 'global-badge ' + (up?'pos':'neg');
@@ -714,13 +724,13 @@ function computeAndRenderVariations(){
   setChip('1w', pastTotals['1w']);
   setChip('1m', pastTotals['1m']);
   setChip('1y', pastTotals['1y']);
-  setChip('all', allTimeTotal);
+  setChip('all', totalInvested); // All time = vs money actually invested → matches the badge below
 
   renderList(); // refresh the "since midnight" badges in the coin rows
 }
 
 async function renderActive(){
-  const series = await getHistory(activeCoin, activeDays);
+  const series = await getHistory(activeCoin, activeRange);
   currentSeries = series;
   resizeCanvas();
   updateHeader(activeCoin, series);
@@ -783,53 +793,23 @@ document.querySelectorAll('.range-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    activeDays = parseInt(btn.dataset.days, 10);
+    activeRange = btn.dataset.range;
     renderActive();
   });
 });
 
 window.addEventListener('resize', resizeCanvas);
 
-/* ============ EUR → USD RATE (for the "invested" comparison) ============ */
-async function fetchEurUsdRate(){
-  try{
-    const res = await fetch('https://api.frankfurter.app/latest?from=EUR&to=USD');
-    if(!res.ok) throw new Error('bad');
-    const data = await res.json();
-    if(data.rates && typeof data.rates.USD === 'number'){ eurToUsdRate = data.rates.USD; return; }
-    throw new Error('no rate');
-  }catch(e){ /* try a second source */ }
-
-  try{
-    const res = await fetch('https://open.er-api.com/v6/latest/EUR');
-    if(!res.ok) throw new Error('bad');
-    const data = await res.json();
-    if(data.rates && typeof data.rates.USD === 'number'){ eurToUsdRate = data.rates.USD; return; }
-    throw new Error('no rate');
-  }catch(e){ /* both live sources failed */ }
-
-  // Last resort so the badge never gets stuck on "loading rate…" — an
-  // approximate fixed rate, close enough for a rough gain/loss read.
-  eurToUsdRate = 1.08;
-}
-
-document.getElementById('invested-input').addEventListener('input', () => updateTotals());
-
 /* ============ INIT ============ */
 recompute();
 renderList();
 renderActive(); // fires the chart's own market_chart request first, uncontested
 
-resolveIcons().then(() => {
-  renderList();
-  document.getElementById('asset-icon-inline').innerHTML = iconMarkup(activeCoin);
-});
 refreshLivePrices().then(() => {
   renderList();
   document.getElementById('asset-icon-inline').innerHTML = iconMarkup(activeCoin);
   updateHeader(activeCoin, currentSeries.length ? currentSeries : [{v:activeCoin.value,t:Date.now()},{v:activeCoin.value,t:Date.now()}]);
 });
-fetchEurUsdRate().then(() => updateTotals());
 loadVariations();
 
 </script>

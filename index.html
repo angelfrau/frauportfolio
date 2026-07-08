@@ -222,15 +222,15 @@
         <div class="value" id="big-value">$0.00</div>
         <div class="badge-row">
           <span class="badge" id="change-badge">—</span>
-          <span class="range-label" id="range-label">Last Year</span>
+          <span class="range-label" id="range-label">Last 24h</span>
         </div>
       </div>
       <div class="ranges" id="ranges">
         <button class="range-btn" data-range="1h">1H</button>
-        <button class="range-btn" data-range="24h">24H</button>
+        <button class="range-btn active" data-range="24h">24H</button>
         <button class="range-btn" data-range="1w">1W</button>
         <button class="range-btn" data-range="1m">1M</button>
-        <button class="range-btn active" data-range="1y">1Y</button>
+        <button class="range-btn" data-range="1y">1Y</button>
         <button class="range-btn" data-range="all">ALL</button>
       </div>
     </div>
@@ -289,7 +289,7 @@ const coins = [
 const totalInvested = coins.reduce((s,c)=>s+c.invested,0);
 
 let activeCoin = coins.find(c => c.ticker === 'ALGO');
-let activeRange = '1y';
+let activeRange = '24h';
 let historyCache = {};
 
 function recompute(){
@@ -430,14 +430,14 @@ async function getHistory(coin, rangeKey){
       pts = sliced.length >= 2 ? sliced : base.slice(-2);
     }
     series = pts.map(p => ({ t: p.t, v: p.price * coin.holdings }));
+    historyCache[key] = series; // only cache REAL data
   }else{
-    // No real data at all (offline / rate-limited hard) — flat honest line at
-    // the current value, so the card still renders without inventing a trend.
+    // No real data yet (offline / rate-limited) — flat honest line at the current
+    // value so the card still renders. NOT cached, so it retries next time.
     const now = Date.now();
     const span = RANGE_CUTOFF_MS[rangeKey] || 86400e3;
     series = [{ t: now-span, v: coin.value }, { t: now, v: coin.value }];
   }
-  historyCache[key] = series;
   return series;
 }
 
@@ -541,6 +541,18 @@ function resizeCanvas(){
   drawChart(currentSeries);
 }
 
+let hoverIdx = null; // index of the point the cursor is over, or null
+
+function drawPlaceholder(){
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle = 'rgba(102,92,121,0.0)';
+  ctx.font = `${13*devicePixelRatio}px 'IBM Plex Mono', monospace`;
+  ctx.fillStyle = 'rgba(179,160,136,0.9)';
+  ctx.textAlign = 'center';
+  ctx.fillText('Loading chart…', W/2, H/2);
+}
+
 function drawChart(series){
   if(!series || !series.length) return;
   const W = canvas.width, H = canvas.height;
@@ -580,23 +592,59 @@ function drawChart(series){
   ctx.lineWidth = 2 * devicePixelRatio;
   ctx.lineJoin = 'round';
   ctx.stroke();
+
+  // cursor: vertical guide line + dot at the hovered point
+  if(hoverIdx !== null && series[hoverIdx]){
+    const x = xAt(hoverIdx), y = yAt(series[hoverIdx].v);
+    ctx.beginPath();
+    ctx.moveTo(x, pad); ctx.lineTo(x, H-pad);
+    ctx.strokeStyle = 'rgba(102,92,121,0.35)';
+    ctx.lineWidth = 1 * devicePixelRatio;
+    ctx.setLineDash([4*devicePixelRatio, 4*devicePixelRatio]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.beginPath();
+    ctx.arc(x, y, 4.5*devicePixelRatio, 0, Math.PI*2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x, y, 4.5*devicePixelRatio, 0, Math.PI*2);
+    ctx.strokeStyle = '#FFFBF3';
+    ctx.lineWidth = 2*devicePixelRatio;
+    ctx.stroke();
+  }
 }
 
-canvas.parentElement.addEventListener('pointermove', e => {
+function handleHover(clientX){
   if(!currentSeries.length) return;
   const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const frac = Math.min(Math.max(x/rect.width, 0), 1);
+  const x = Math.min(Math.max(clientX - rect.left, 0), rect.width);
+  const frac = x / rect.width;
   const idx = Math.round(frac * (currentSeries.length-1));
   const pt = currentSeries[idx];
   if(!pt) return;
+  hoverIdx = idx;
+  drawChart(currentSeries);
+  const isIntraday = activeRange === '1h' || activeRange === '24h';
+  const dateStr = isIntraday
+    ? new Date(pt.t).toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'})
+    : new Date(pt.t).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
   tip.querySelector('.tip-val').textContent = fmtCompact(pt.v);
-  tip.querySelector('.tip-date').textContent = new Date(pt.t).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
-  tip.style.left = x + 'px';
+  tip.querySelector('.tip-date').textContent = dateStr;
+  const tipX = Math.min(Math.max(x, 40), rect.width - 40);
+  tip.style.left = tipX + 'px';
   tip.style.top = '10px';
   tip.classList.add('show');
+}
+
+canvas.parentElement.addEventListener('pointermove', e => handleHover(e.clientX));
+canvas.parentElement.addEventListener('pointerdown', e => handleHover(e.clientX));
+canvas.parentElement.addEventListener('pointerleave', () => {
+  tip.classList.remove('show');
+  hoverIdx = null;
+  drawChart(currentSeries);
 });
-canvas.parentElement.addEventListener('pointerleave', () => tip.classList.remove('show'));
 
 /* ============ UI UPDATE ============ */
 function updateHeader(coin, series){
@@ -712,6 +760,8 @@ async function loadMidnightBadges(){
 }
 
 async function renderActive(){
+  hoverIdx = null;
+  tip.classList.remove('show');
   const series = await getHistory(activeCoin, activeRange);
   currentSeries = series;
   resizeCanvas();
@@ -788,14 +838,15 @@ window.addEventListener('resize', resizeCanvas);
 recompute();
 renderList();
 computeVariations();       // shows chips as "—" until prices arrive
-renderActive();            // active coin's chart — its own request
+resizeCanvas();            // size the canvas before first paint
+drawPlaceholder();         // show a "Loading chart…" frame while the first data loads
 
 refreshLivePrices().then(() => {
   recompute();
   renderList();
   computeVariations();     // now correct: uses real per-coin % changes
   document.getElementById('asset-icon-inline').innerHTML = iconMarkup(activeCoin);
-  renderActive();          // re-render chart with fresh prices
+  renderActive();          // fetch the active coin's chart AFTER prices (avoids the initial 429 burst)
   loadMidnightBadges();    // gentle background fill for the "since midnight" list badges
 });
 

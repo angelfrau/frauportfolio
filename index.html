@@ -646,15 +646,18 @@ function updateGlobalBadge(total){
    and caches everything, so it's a one-time cost per session. */
 async function loadVariations(){
   const withId = coins.filter(c => c.cgId);
-  for(const c of withId){
-    await getRawHistory(c, 1);
-    await sleep(220);
+  const BATCH = 3;
+  for(let i=0; i<withId.length; i+=BATCH){
+    const batch = withId.slice(i, i+BATCH);
+    await Promise.all(batch.flatMap(c => [ getRawHistory(c, 1), getRawHistory(c, 'max') ]));
+    if(i+BATCH < withId.length) await sleep(250);
+    // Update chips/badges progressively as each batch lands, instead of
+    // waiting for all 9 coins before showing anything.
+    computeAndRenderVariations();
   }
-  for(const c of withId){
-    await getRawHistory(c, 'max');
-    await sleep(220);
-  }
+}
 
+function computeAndRenderVariations(){
   const now = Date.now();
   const midnight = new Date(); midnight.setHours(0,0,0,0);
   const targets = {
@@ -793,8 +796,21 @@ async function fetchEurUsdRate(){
     const res = await fetch('https://api.frankfurter.app/latest?from=EUR&to=USD');
     if(!res.ok) throw new Error('bad');
     const data = await res.json();
-    if(data.rates && typeof data.rates.USD === 'number') eurToUsdRate = data.rates.USD;
-  }catch(e){ /* leave null — badge shows "loading rate…" until it works */ }
+    if(data.rates && typeof data.rates.USD === 'number'){ eurToUsdRate = data.rates.USD; return; }
+    throw new Error('no rate');
+  }catch(e){ /* try a second source */ }
+
+  try{
+    const res = await fetch('https://open.er-api.com/v6/latest/EUR');
+    if(!res.ok) throw new Error('bad');
+    const data = await res.json();
+    if(data.rates && typeof data.rates.USD === 'number'){ eurToUsdRate = data.rates.USD; return; }
+    throw new Error('no rate');
+  }catch(e){ /* both live sources failed */ }
+
+  // Last resort so the badge never gets stuck on "loading rate…" — an
+  // approximate fixed rate, close enough for a rough gain/loss read.
+  eurToUsdRate = 1.08;
 }
 
 document.getElementById('invested-input').addEventListener('input', () => updateTotals());

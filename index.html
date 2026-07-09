@@ -63,6 +63,10 @@
     font-family:'Cormorant Garamond',serif; font-weight:700; font-size:9px; color:#fff;
   }
   .asset-tag span.name{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-muted); letter-spacing:.04em; white-space:nowrap; }
+  .asset-tag span.unit-price{
+    font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:600; color:var(--gold-deep);
+    background:rgba(201,151,63,0.12); padding:2px 7px; border-radius:12px; white-space:nowrap;
+  }
   .value{ font-family:'Cormorant Garamond',serif; font-size:26px; font-weight:700; letter-spacing:.01em; color:var(--ink-muted); }
   .badge-row{ display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }
   .badge{
@@ -218,7 +222,7 @@
   <div class="card">
     <div class="chart-head">
       <div class="chart-head-top">
-        <div class="asset-tag"><span class="icon-slot" id="asset-icon-inline"></span><span class="name" id="asset-name">ALGORAND · ALGO</span></div>
+        <div class="asset-tag"><span class="icon-slot" id="asset-icon-inline"></span><span class="name" id="asset-name">ALGORAND · ALGO</span><span class="unit-price" id="unit-price"></span></div>
         <div class="value" id="big-value">$0.00</div>
         <div class="badge-row">
           <span class="badge" id="change-badge">—</span>
@@ -414,10 +418,13 @@ async function getHistory(coin, rangeKey){
   if(historyCache[key]) return historyCache[key];
 
   const useFine = (rangeKey === '1h' || rangeKey === '24h');
-  const baseKey = coin.ticker + (useFine ? '-base1' : '-baseMax');
+  const baseKey = coin.ticker + (useFine ? '-base1' : '-baseLong');
   let base = rawHistoryCache[baseKey];
   if(!base){
-    base = await fetchChart(coin, useFine ? 1 : 'max');
+    // days=1 for intraday; days=365 for everything longer. NOT days=max —
+    // CoinGecko's free/public tier rejects max and anything over 365 days,
+    // which is exactly why 1W/1M/1Y/ALL were coming back empty (flat line).
+    base = await fetchChart(coin, useFine ? 1 : 365);
     if(base) rawHistoryCache[baseKey] = base;
   }
 
@@ -650,6 +657,7 @@ canvas.parentElement.addEventListener('pointerleave', () => {
 function updateHeader(coin, series){
   document.getElementById('asset-icon-inline').innerHTML = iconMarkup(coin);
   document.getElementById('asset-name').textContent = `${coin.name.toUpperCase()} · ${coin.ticker}`;
+  document.getElementById('unit-price').textContent = fmtUSD(coin.price);
 
   const last = series[series.length-1].v;
   document.getElementById('big-value').textContent = fmtCompact(last);
@@ -660,6 +668,11 @@ function updateHeader(coin, series){
     // "All time" for a coin = my position's gain/loss vs what I invested in it.
     abs = coin.value - coin.invested;
     pct = coin.invested ? (abs / coin.invested) * 100 : 0;
+  }else if(activeRange === '24h' && coin.pctChange && typeof coin.pctChange['24h'] === 'number'){
+    // Use CoinGecko's official 24h figure so the header badge matches the list
+    // badge and TradingView exactly (not the chart's first-to-last delta).
+    pct = coin.pctChange['24h'];
+    abs = last - (last / (1 + pct/100));
   }else{
     const first = series[0].v;
     pct = first ? ((last-first)/first) * 100 : 0;
@@ -736,29 +749,6 @@ function computeVariations(){
   el.className = 'vc-val ' + (up?'pos':'neg');
 }
 
-/* ============ "SINCE MIDNIGHT" BADGES (coin list) ============
-   Needs each coin's price at 00:00 today, which only intraday history has.
-   Loads the days=1 series per coin gently in the background, in small batches,
-   AFTER the chips and prices are already on screen. Until a coin's series is in,
-   its list badge falls back to the 24h figure from the markets call. */
-async function loadMidnightBadges(){
-  const withId = coins.filter(c => c.cgId);
-  const midnight = new Date(); midnight.setHours(0,0,0,0);
-  const BATCH = 2;
-  for(let i=0; i<withId.length; i+=BATCH){
-    const batch = withId.slice(i, i+BATCH);
-    await Promise.all(batch.map(async c => {
-      const base = await ensureBase(c, true);
-      if(base){
-        const mp = nearestPrice(base, midnight.getTime());
-        if(mp) c.changeSinceMidnight = ((c.price - mp) / mp) * 100;
-      }
-    }));
-    renderList();
-    if(i+BATCH < withId.length) await sleep(500);
-  }
-}
-
 async function renderActive(){
   hoverIdx = null;
   tip.classList.remove('show');
@@ -772,9 +762,7 @@ async function renderActive(){
 function buildRow(c){
   const row = document.createElement('div');
   row.className = 'asset-row' + (c.ticker === activeCoin.ticker ? ' active' : '');
-  const chg = (c.changeSinceMidnight !== null && c.changeSinceMidnight !== undefined)
-    ? c.changeSinceMidnight
-    : (c.pctChange && typeof c.pctChange['24h'] === 'number' ? c.pctChange['24h'] : null);
+  const chg = (c.pctChange && typeof c.pctChange['24h'] === 'number') ? c.pctChange['24h'] : null;
   const chgHtml = chg === null || chg === undefined
     ? `<span class="row-badge">—</span>`
     : `<span class="row-badge ${chg>=0?'pos':'neg'}">${chg>=0?'▲':'▼'} ${Math.abs(chg).toFixed(2)}%</span>`;
@@ -847,7 +835,6 @@ refreshLivePrices().then(() => {
   computeVariations();     // now correct: uses real per-coin % changes
   document.getElementById('asset-icon-inline').innerHTML = iconMarkup(activeCoin);
   renderActive();          // fetch the active coin's chart AFTER prices (avoids the initial 429 burst)
-  loadMidnightBadges();    // gentle background fill for the "since midnight" list badges
 });
 
 </script>

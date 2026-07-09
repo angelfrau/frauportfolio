@@ -87,6 +87,25 @@
   .range-btn.active{ background:var(--gold); border-color:var(--gold); color:#fff; }
 
   .chart-wrap{ position:relative; margin-top:16px; height:180px; }
+  .alltime-panel{
+    position:absolute; inset:0; display:none;
+    flex-direction:column; justify-content:center; gap:18px; padding:8px 4px;
+  }
+  .alltime-panel.show{ display:flex; }
+  .at-block{ display:flex; flex-direction:column; gap:7px; }
+  .at-head{ display:flex; justify-content:space-between; align-items:baseline; }
+  .at-label{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-faint); letter-spacing:.04em; }
+  .at-amount{ font-family:'Cormorant Garamond',serif; font-size:22px; font-weight:700; color:var(--ink); }
+  .at-bar{ height:12px; background:var(--card-2); border-radius:8px; overflow:hidden; }
+  .at-fill{ height:100%; border-radius:8px; transition:width .5s ease; }
+  .at-fill.invested{ background:var(--ink-faint); }
+  .at-fill.pos{ background:var(--green); }
+  .at-fill.neg{ background:var(--red); }
+  .at-delta{
+    text-align:center; font-family:'IBM Plex Mono',monospace; font-size:14px; font-weight:700; margin-top:2px;
+  }
+  .at-delta.pos{ color:var(--green); }
+  .at-delta.neg{ color:var(--red); }
   canvas{ display:block; width:100%; height:100%; }
   .crosshair-tip{
     position:absolute; pointer-events:none; opacity:0;
@@ -133,6 +152,7 @@
   .asset-info{ flex:1; min-width:0; cursor:pointer; }
   .asset-info .t{ font-family:'Space Grotesk','Cormorant Garamond',serif; font-size:15px; font-weight:700; letter-spacing:.01em; }
   .asset-info .x{ font-size:10.5px; color:var(--ink-faint); font-family:'IBM Plex Mono',monospace; }
+  .asset-info .unit-price-row{ font-size:11px; color:var(--gold-deep); font-family:'IBM Plex Mono',monospace; font-weight:600; margin-top:2px; }
   .asset-right{ text-align:right; }
   .asset-right .v{ font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:600; }
   .row-badge{
@@ -242,6 +262,17 @@
     <div class="chart-wrap">
       <canvas id="chart"></canvas>
       <div class="crosshair-tip" id="tip"><div class="tip-val"></div><div class="tip-date"></div></div>
+      <div class="alltime-panel" id="alltime-panel">
+        <div class="at-block">
+          <div class="at-head"><span class="at-label">Invested · Nov 20, 2024</span><span class="at-amount" id="at-invested">$0</span></div>
+          <div class="at-bar"><div class="at-fill invested" id="at-fill-invested"></div></div>
+        </div>
+        <div class="at-block">
+          <div class="at-head"><span class="at-label">Today</span><span class="at-amount" id="at-current">$0</span></div>
+          <div class="at-bar"><div class="at-fill" id="at-fill-current"></div></div>
+        </div>
+        <div class="at-delta" id="at-delta">—</div>
+      </div>
     </div>
 
     <div class="stat-boxes">
@@ -286,11 +317,13 @@ const coins = [
   {ticker:'CSPR',   name:'Casper',          exchange:'MEXC',    holdings:725880,       price:0.0019,      color:'#B5533C', cgId:'casper-network',  category:'alt',  invested:4096.86},
   {ticker:'GALA',   name:'Gala',            exchange:'Kraken',  holdings:45129,        price:0.00220,     color:'#C9A356', cgId:'gala',             category:'alt',  invested:842.66},
   {ticker:'POPCAT', name:'Popcat',          exchange:'Kraken',  holdings:11953,        price:0.0484,      color:'#C88A9E', cgId:'popcat',           category:'meme', invested:2079.24},
-  {ticker:'USA',    name:'American Coin',   exchange:'Jupiter', holdings:6121912246,   price:0.000000221, color:'#6B8FBF', cgId:'american-coin',    category:'meme', invested:8295},
+  {ticker:'USA',    name:'American Coin',   exchange:'Jupiter', holdings:6121912246,   price:0.000000221, color:'#6B8FBF', cgId:'american-coin',    category:'meme', invested:2500},
   {ticker:'GOO',    name:'Silly Goose',     exchange:'Jupiter', holdings:3499676,      price:0.00009,     color:'#7FA26B', cgId:'silly-goose',      category:'meme', invested:6200},
   {ticker:'TREMP',  name:'Donald Tremp',    exchange:'Jupiter', holdings:38765,        price:0.0043,      color:'#A98BC9', cgId:'donald-tremp',     category:'meme', invested:2500},
 ];
-const totalInvested = coins.reduce((s,c)=>s+c.invested,0);
+const totalInvested = 45000; // Real total put in: $10k + 15k€ + 20k€, counted 1:1 (no FX conversion),
+// used for the GLOBAL all-time. Per-coin `invested` above sums to ~$43.7k rather than 45k because
+// money was withdrawn from the exchange along the way — that's expected, the global figure is the anchor.
 
 let activeCoin = coins.find(c => c.ticker === 'ALGO');
 let activeRange = '24h';
@@ -366,7 +399,7 @@ function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
 /* Shared cache of raw {t,price} series keyed by coin+resolution. Declared here
    because getHistory (below) reads it. Keys: "<TICKER>-base1" (days=1) and
-   "<TICKER>-baseMax" (days=max). */
+   "<TICKER>-baseLong" (days=365, the free-tier maximum). */
 const rawHistoryCache = {};
 
 /* Maps a range key to the CoinGecko `days` param. */
@@ -446,20 +479,6 @@ async function getHistory(coin, rangeKey){
     series = [{ t: now-span, v: coin.value }, { t: now, v: coin.value }];
   }
   return series;
-}
-
-/* ============ RAW PRICE HISTORY (unmultiplied) ============
-   Used for the portfolio-wide variation chips and the "since midnight" change
-   per coin. Reuses the SAME base series getHistory already fetched/cached, so
-   the whole app makes at most 2 chart calls per coin (days=1 and days=max),
-   not one per range. No synthetic fallback — if a coin has no real data its
-   variation cells just show "—". */
-async function ensureBase(coin, fine){
-  const baseKey = coin.ticker + (fine ? '-base1' : '-baseMax');
-  if(rawHistoryCache[baseKey]) return rawHistoryCache[baseKey];
-  const data = await fetchChart(coin, fine ? 1 : 'max');
-  if(data) rawHistoryCache[baseKey] = data;
-  return data;
 }
 
 function nearestPrice(series, targetTs){
@@ -752,10 +771,45 @@ function computeVariations(){
 async function renderActive(){
   hoverIdx = null;
   tip.classList.remove('show');
+  const canvasEl = document.getElementById('chart');
+  const panel = document.getElementById('alltime-panel');
+
+  if(activeRange === 'all'){
+    // No line chart for all-time (free API only reaches ~1y back, and you bought
+    // Nov 2024). Show an invested-vs-today comparison instead.
+    canvasEl.style.display = 'none';
+    panel.classList.add('show');
+    renderAllTimePanel(activeCoin);
+    updateHeader(activeCoin, [{t:Date.now(), v:activeCoin.value}, {t:Date.now(), v:activeCoin.value}]);
+    return;
+  }
+
+  canvasEl.style.display = 'block';
+  panel.classList.remove('show');
   const series = await getHistory(activeCoin, activeRange);
   currentSeries = series;
   resizeCanvas();
   updateHeader(activeCoin, series);
+}
+
+function renderAllTimePanel(coin){
+  const invested = coin.invested;
+  const current = coin.value;
+  const maxVal = Math.max(invested, current) || 1;
+  const up = current >= invested;
+
+  document.getElementById('at-invested').textContent = fmtCompact(invested);
+  document.getElementById('at-current').textContent = fmtCompact(current);
+  document.getElementById('at-fill-invested').style.width = (invested/maxVal*100) + '%';
+  const curFill = document.getElementById('at-fill-current');
+  curFill.style.width = (current/maxVal*100) + '%';
+  curFill.className = 'at-fill ' + (up ? 'pos' : 'neg');
+
+  const abs = current - invested;
+  const pct = invested ? (abs/invested*100) : 0;
+  const delta = document.getElementById('at-delta');
+  delta.textContent = (up?'▲ ':'▼ ') + Math.abs(pct).toFixed(1) + '%  ·  ' + (up?'+':'-') + fmtCompact(Math.abs(abs));
+  delta.className = 'at-delta ' + (up?'pos':'neg');
 }
 
 /* ============ ASSET LIST (grouped, with editable holdings) ============ */
@@ -771,6 +825,7 @@ function buildRow(c){
     <div class="asset-info">
       <div class="t">${c.ticker}</div>
       <div class="x">${c.exchange} · ${c.pct.toFixed(1)}%</div>
+      <div class="unit-price-row">${fmtUSD(c.price)}</div>
     </div>
     <div class="asset-right">
       <div class="v">${fmtCompact(c.value)}</div>
@@ -836,6 +891,31 @@ refreshLivePrices().then(() => {
   document.getElementById('asset-icon-inline').innerHTML = iconMarkup(activeCoin);
   renderActive();          // fetch the active coin's chart AFTER prices (avoids the initial 429 burst)
 });
+
+/* ============ AUTO-REFRESH ============
+   Prices refresh on their own: whenever you re-open the app (tap the icon and it
+   comes back into view) if it's been >20s, and periodically every 90s while open.
+   This only re-pulls the lightweight prices call — it updates every value, the
+   chips and the header price, but leaves the historical chart alone (that only
+   refetches when you switch coin/range) so it stays cheap on the API. */
+let lastRefresh = Date.now();
+function refreshPricesOnly(){
+  lastRefresh = Date.now();
+  refreshLivePrices().then(() => {
+    recompute();
+    renderList();
+    computeVariations();
+    // refresh the header's big value + unit price for the active coin, keep its chart
+    if(currentSeries.length){
+      currentSeries[currentSeries.length-1] = { t: Date.now(), v: activeCoin.value };
+      updateHeader(activeCoin, currentSeries);
+    }
+  });
+}
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'visible' && Date.now()-lastRefresh > 20000) refreshPricesOnly();
+});
+setInterval(() => { if(document.visibilityState === 'visible') refreshPricesOnly(); }, 90000);
 
 </script>
 </body>

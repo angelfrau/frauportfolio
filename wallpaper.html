@@ -173,6 +173,7 @@ const coins = [
   {ticker:'TREMP',  name:'Donald Tremp',  holdings:38765,      price:0.0043,      cgId:'donald-tremp',    cat:'meme'},
 ];
 const TOTAL_INVESTED = 45000;       // $10k + 15k€ + 20k€, counted 1:1
+const BASE_EXTRA = 10000;           // private flat amount added to the displayed total
 const CYCLE_MS = 12000;             // time each coin stays on screen
 const PRICE_REFRESH_MS = 90000;
 const CHART_TTL_MS = 30 * 60000;    // re-fetch a coin's 7-day chart at most every 30 min
@@ -272,7 +273,7 @@ function tweenTotal(to){
 
 function renderLeft(){
   coins.forEach(c => c.value = c.holdings * c.price);
-  const total = coins.reduce((s,c) => s + c.value, 0);
+  const total = coins.reduce((s,c) => s + c.value, 0) + BASE_EXTRA;
   tweenTotal(total);
 
   const diff = total - TOTAL_INVESTED, p = diff / TOTAL_INVESTED * 100;
@@ -286,6 +287,7 @@ function renderLeft(){
       const x = c.chg && c.chg[k];
       if(typeof x === 'number' && isFinite(x) && 1 + x/100 > 0){ past += c.value / (1 + x/100); now += c.value; }
     });
+    if(now > 0){ past += BASE_EXTRA; now += BASE_EXTRA; }
     const el = document.querySelector(`.period .v[data-k="${k}"]`);
     setChange(el, past > 0 ? (now - past) / past * 100 : NaN);
   });
